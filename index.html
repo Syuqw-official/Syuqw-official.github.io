@@ -683,475 +683,156 @@ window.applyIllustrationPieces=function(root=document){root.querySelectorAll?.('
 
 <div class="autosave-note">この端末・ブラウザに自動保存されます。対局中の盤面と制限時間も自動保存されます。</div>
 
-  <script id="marubatsu-online-join-fix">
-(function(){
-  'use strict';
-
-  let joinRequestId = 0;
-
-  /* =========================
-     オンライン対戦入口
-     ========================= */
-  function showJoinLobby(){
-
-    openModal(`
-      <h2>🌐 2台2人対戦</h2>
-      <p>ルームを作るか、相手から受け取った4文字のコードで参加します。</p>
-
-      <div class="grid">
-        <button class="btn primary" id="makeRoomFix">
-          部屋を作る
-        </button>
-
-        <button class="btn" id="enterRoomFix">
-          部屋に入る
-        </button>
-      </div>
-
-      <div class="gamebar">
-        <button class="btn small" id="onlineCancelFix">
-          戻る
-        </button>
-      </div>
-    `);
-
-    by('makeRoomFix', function(){
-      closeModal();
-
-      if(typeof window.createOnlineRoom === 'function'){
-        window.createOnlineRoom();
-      }
-    });
-
-    by('enterRoomFix', function(){
-      showJoinCode();
-    });
-
-    by('onlineCancelFix', function(){
-      closeModal();
-    });
+function joinOnlineRoom(code){
+  if(!firebaseReady()){
+    alert('Firebaseに接続できません。\nFirebase設定またはネット接続を確認してください。');
+    return;
   }
 
+  code=String(code||'').trim().toUpperCase();
 
-  /* =========================
-     ルームコード入力画面
-     ========================= */
-  function showJoinCode(){
-
-    openModal(`
-      <h2>ルームに入る</h2>
-
-      <p class="muted">
-        相手から受け取った4文字を入力してください。
-      </p>
-
-      <label class="label">
-        ルームコード
-      </label>
-
-      <input
-        class="field"
-        id="joinCodeFix"
-        maxlength="4"
-        autocomplete="off"
-        autocapitalize="characters"
-        placeholder="例：A7K3"
-      >
-
-      <div class="gamebar">
-        <button class="btn primary" id="joinGoFix">
-          参加する
-        </button>
-
-        <button class="btn" id="joinBackFix">
-          戻る
-        </button>
-      </div>
-    `);
-
-    const input = document.getElementById('joinCodeFix');
-
-    if(input){
-      input.focus();
-
-      input.addEventListener('input', function(){
-        input.value = input.value
-          .replace(/[^a-zA-Z0-9]/g,'')
-          .toUpperCase()
-          .slice(0,4);
-      });
-
-      input.addEventListener('keydown', function(e){
-        if(e.key === 'Enter'){
-          startJoin(input.value);
-        }
-      });
-    }
-
-    by('joinGoFix', function(){
-      startJoin(input ? input.value : '');
-    });
-
-    by('joinBackFix', function(){
-      joinRequestId++;
-      showJoinLobby();
-    });
+  if(!/^[A-Z0-9]{4}$/.test(code)){
+    alert('4文字のルームコードを入力してください。');
+    return;
   }
 
+  openModal(`
+    <h2>ルームを確認中…</h2>
+    <p>「${esc(code)}」のルームを確認しています。</p>
+    <div class="notice">少しお待ちください。</div>
+    <div class="gamebar">
+      <button class="btn" id="joinCancelDirect">戻る</button>
+    </div>
+  `);
 
-  /* =========================
-     ルーム参加処理
-     ========================= */
-  function startJoin(rawCode){
+  let cancelled=false;
 
-    const code = String(rawCode || '')
-      .trim()
-      .toUpperCase();
+  by('joinCancelDirect',()=>{
+    cancelled=true;
+    openOnlineLobby();
+  });
 
-    if(!firebaseReady()){
-      alert(
-        'Firebaseに接続できません。\n' +
-        'Firebase設定またはネット接続を確認してください。'
-      );
-      return;
-    }
+  const ref=window.MARUBATSU_DB.ref('rooms/'+code);
 
-    if(!/^[A-Z0-9]{4}$/.test(code)){
-      alert('4文字のルームコードを入力してください。');
-      return;
-    }
+  const timeout=setTimeout(()=>{
+    if(cancelled)return;
 
-    const requestId = ++joinRequestId;
-
-    /* 待機画面を表示する。
-       Firebaseの返事が来るまで画面を固めない。 */
     openModal(`
-      <h2>ルームを確認中…</h2>
-
-      <p>
-        「${esc(code)}」のルームを確認しています。
-      </p>
-
+      <h2>確認できませんでした</h2>
+      <p>ルームの確認に時間がかかっています。</p>
       <div class="notice">
-        少しお待ちください。
+        通信状態を確認して、もう一度お試しください。
       </div>
-
       <div class="gamebar">
-        <button class="btn" id="joinCancelFix">
-          戻る
-        </button>
+        <button class="btn primary" id="joinRetryDirect">もう一度入力</button>
+        <button class="btn" id="joinBackDirect">戻る</button>
       </div>
     `);
 
-    by('joinCancelFix', function(){
-
-      if(requestId !== joinRequestId){
-        return;
-      }
-
-      joinRequestId++;
-
-      showJoinCode();
-    });
-
-
-    const ref =
-      window.MARUBATSU_DB.ref('rooms/' + code);
-
-
-    let finished = false;
-
-
-    /* 8秒以上返事がない場合 */
-    const timeout = setTimeout(function(){
-
-      if(finished || requestId !== joinRequestId){
-        return;
-      }
-
-      finished = true;
-
+    by('joinRetryDirect',()=>{
       openModal(`
-        <h2>確認できませんでした</h2>
-
-        <p>
-          ルームの確認に時間がかかっています。
-        </p>
-
-        <div class="notice">
-          通信状態を確認して、もう一度お試しください。
-        </div>
-
+        <h2>ルームに入る</h2>
+        <label class="label">ルームコード</label>
+        <input class="field" id="joinCode" maxlength="4" placeholder="例：A7K3">
         <div class="gamebar">
-
-          <button class="btn primary" id="joinRetryTimeout">
-            もう一度試す
-          </button>
-
-          <button class="btn" id="joinBackTimeout">
-            戻る
-          </button>
-
+          <button class="btn primary" id="joinGo">参加する</button>
+          <button class="btn" id="joinBack">戻る</button>
         </div>
       `);
 
-      by('joinRetryTimeout', function(){
-        showJoinCode();
+      by('joinGo',()=>{
+        const e=document.getElementById('joinCode');
+        joinOnlineRoom(e?e.value:'');
       });
 
-      by('joinBackTimeout', function(){
-        showJoinLobby();
-      });
-
-    },8000);
-
-
-    /* Firebaseからルームを取得 */
-    ref.once('value')
-      .then(function(snapshot){
-
-        if(
-          finished ||
-          requestId !== joinRequestId
-        ){
-          return;
-        }
-
-        finished = true;
-        clearTimeout(timeout);
-
-
-        /* ルームが存在しない */
-        if(!snapshot.exists()){
-
-          openModal(`
-            <h2>ルームが見つかりません</h2>
-
-            <p>
-              入力したコードのルームは存在しません。
-            </p>
-
-            <div class="gamebar">
-
-              <button class="btn primary" id="joinRetryMissing">
-                もう一度入力
-              </button>
-
-              <button class="btn" id="joinBackMissing">
-                戻る
-              </button>
-
-            </div>
-          `);
-
-          by('joinRetryMissing', function(){
-            showJoinCode();
-          });
-
-          by('joinBackMissing', function(){
-            showJoinLobby();
-          });
-
-          return;
-        }
-
-
-        const data = snapshot.val() || {};
-
-
-        /* 満員 */
-        if(data.guestName || data.guestOnline){
-
-          openModal(`
-            <h2>ルームが満員です</h2>
-
-            <p>
-              このルームにはすでに参加者がいます。
-            </p>
-
-            <div class="gamebar">
-
-              <button class="btn primary" id="joinRetryFull">
-                別のコードを入力
-              </button>
-
-              <button class="btn" id="joinBackFull">
-                戻る
-              </button>
-
-            </div>
-          `);
-
-          by('joinRetryFull', function(){
-            showJoinCode();
-          });
-
-          by('joinBackFull', function(){
-            showJoinLobby();
-          });
-
-          return;
-        }
-
-
-        /*
-         * ここが重要。
-         *
-         * Firebaseでルームが存在すると確認できてから
-         * 初めて参加状態へ変更する。
-         */
-        state.onlineRoom = code;
-        state.onlineRole = 'guest';
-        state.mode = 'online';
-        state.page = 'online';
-
-        state.previous = 'setup';
-
-        state._onlineResultShown = false;
-
-        state.skinTarget = 2;
-
-
-        /* モーダルを閉じる */
-        closeModal();
-
-
-        /*
-         * 画面をオンラインルームへ変更
-         */
-        try{
-
-          save();
-          render();
-
-        }catch(error){
-
-          console.error(
-            'MARUBATSU LINE join render error:',
-            error
-          );
-
-          alert(
-            'ルームには参加できましたが、' +
-            '画面の更新に失敗しました。\n' +
-            'ページを再読み込みしてください。'
-          );
-
-          return;
-        }
-
-
-        /*
-         * Firebase監視開始
-         */
-        try{
-
-          if(
-            typeof window.onlineRoomListen ===
-            'function'
-          ){
-
-            window.onlineRoomListen();
-
-          }else if(
-            typeof onlineRoomListen ===
-            'function'
-          ){
-
-            onlineRoomListen();
-
-          }
-
-        }catch(error){
-
-          console.error(
-            'MARUBATSU LINE online listener error:',
-            error
-          );
-
-          alert(
-            'ルームには参加できましたが、' +
-            '通信監視の開始に失敗しました。'
-          );
-        }
-
-      })
-
-
-      /* Firebase通信エラー */
-      .catch(function(error){
-
-        if(
-          finished ||
-          requestId !== joinRequestId
-        ){
-          return;
-        }
-
-        finished = true;
-        clearTimeout(timeout);
-
-        console.error(
-          'MARUBATSU LINE join error:',
-          error
-        );
-
-
-        openModal(`
-          <h2>ルームを確認できませんでした</h2>
-
-          <p>
-            Firebaseとの通信中にエラーが発生しました。
-          </p>
-
-          <div class="notice">
-            ${esc(
-              error && error.message
-                ? error.message
-                : '通信エラー'
-            )}
-          </div>
-
-          <div class="gamebar">
-
-            <button class="btn primary" id="joinRetryError">
-              もう一度試す
-            </button>
-
-            <button class="btn" id="joinBackError">
-              戻る
-            </button>
-
-          </div>
-        `);
-
-
-        by('joinRetryError', function(){
-          showJoinCode();
-        });
-
-        by('joinBackError', function(){
-          showJoinLobby();
-        });
-
-      });
-  }
-
-
-  /*
-   * 既存のオンライン対戦入口を
-   * この安全版に置き換える
-   */
-  window.openOnlineLobby = showJoinLobby;
-
-
-  /*
-   * 既存の参加処理もこの版に置き換える
-   */
-  window.joinOnlineRoom = startJoin;
-
-})();
-</script>
+      by('joinBack',openOnlineLobby);
+    });
+
+    by('joinBackDirect',openOnlineLobby);
+
+  },8000);
+
+  ref.once('value').then(s=>{
+    clearTimeout(timeout);
+
+    if(cancelled)return;
+
+    if(!s.exists()){
+      openModal(`
+        <h2>ルームが見つかりません</h2>
+        <p>入力したコードのルームは存在しません。</p>
+        <div class="gamebar">
+          <button class="btn primary" id="joinRetryMissingDirect">もう一度入力</button>
+          <button class="btn" id="joinBackMissingDirect">戻る</button>
+        </div>
+      `);
+
+      by('joinRetryMissingDirect',openOnlineLobby);
+
+      by('joinBackMissingDirect',openOnlineLobby);
+
+      return;
+    }
+
+    const d=s.val()||{};
+
+    if(d.guestName){
+      openModal(`
+        <h2>ルームが満員です</h2>
+        <p>このルームにはすでに参加者がいます。</p>
+        <div class="gamebar">
+          <button class="btn primary" id="joinRetryFullDirect">別のコードを入力</button>
+          <button class="btn" id="joinBackFullDirect">戻る</button>
+        </div>
+      `);
+
+      by('joinRetryFullDirect',openOnlineLobby);
+      by('joinBackFullDirect',openOnlineLobby);
+
+      return;
+    }
+
+    /* Firebaseで存在確認できてから参加 */
+    state.onlineRoom=code;
+    state.onlineRole='guest';
+    state.mode='online';
+    state.page='online';
+    state.previous='setup';
+    state._onlineResultShown=false;
+    state.skinTarget=2;
+
+    closeModal();
+    save();
+    render();
+
+    /* V2版のFirebase監視を確実に使用 */
+    if(typeof window.onlineRoomListen==='function'){
+      window.onlineRoomListen();
+    }
+
+  }).catch(e=>{
+    clearTimeout(timeout);
+
+    if(cancelled)return;
+
+    console.error('MARUBATSU LINE join error:',e);
+
+    openModal(`
+      <h2>ルームを確認できませんでした</h2>
+      <p>Firebaseとの通信中にエラーが発生しました。</p>
+      <div class="notice">
+        ${esc(e&&e.message?e.message:'通信エラー')}
+      </div>
+      <div class="gamebar">
+        <button class="btn primary" id="joinRetryErrorDirect">もう一度入力</button>
+        <button class="btn" id="joinBackErrorDirect">戻る</button>
+      </div>
+    `);
+
+    by('joinRetryErrorDirect',openOnlineLobby);
+    by('joinBackErrorDirect',openOnlineLobby);
+  });
+}
   
 </body>
 </html>
