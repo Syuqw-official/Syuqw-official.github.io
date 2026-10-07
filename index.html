@@ -229,14 +229,151 @@ function onlineKeyStats(name){return {name:String(name||'').slice(0,20),wins:0,d
 function pushOnlineResult(v){if(!firebaseReady())return;const a=[];if(state.p1)a.push({n:state.p1,r:v==='draw'?'d':v==='X'?'w':'l'});if(state.p2&&state.p2!=='AI')a.push({n:state.p2,r:v==='draw'?'d':v==='O'?'w':'l'});a.forEach(x=>window.MARUBATSU_DB.ref('onlineRankings/'+onlineKey(x.n)).transaction(cur=>{cur=cur||onlineKeyStats(x.n);cur.name=x.n;cur.wins=Number(cur.wins||0)+(x.r==='w');cur.draws=Number(cur.draws||0)+(x.r==='d');cur.losses=Number(cur.losses||0)+(x.r==='l');cur.updatedAt=firebase.database.ServerValue.TIMESTAMP;return cur}))}
 function roomBase(code){return {code,hostName:'',guestName:'',board:Array(state.size*state.size).fill(''),size:state.size,win:state.win,turn:0,starter:0,active:false,result:null,winning:[],timerRemaining:60,timerStartedAt:null,hostOnline:false,guestOnline:false,createdAt:firebase.database.ServerValue.TIMESTAMP}}
 function createOnlineRoom(){if(!firebaseReady()){alert('Firebaseに接続できません。\nFirebase設定またはネット接続を確認してください。');return}const code=roomCode();const ref=window.MARUBATSU_DB.ref('rooms/'+code);ref.set(roomBase(code)).then(()=>{state.onlineRoom=code;state.onlineRole='host';state.mode='online';state.page='online';state._onlineResultShown=false;save();render();onlineRoomListen()}).catch(e=>{console.error(e);alert('部屋を作成できませんでした。\n'+(e.message||e))})}
-function joinOnlineRoom(code){if(!firebaseReady()){alert('Firebaseに接続できません。');return}code=String(code||'').trim().toUpperCase();if(!/^[A-Z0-9]{4}$/.test(code)){alert('4文字のルームコードを入力してください。');return}const ref=window.MARUBATSU_DB.ref('rooms/'+code);ref.once('value').then(s=>{if(!s.exists()){alert('そのルームは見つかりません。');return}if(s.val().guestName){alert('このルームは満員です。');return}state.onlineRoom=code;state.onlineRole='guest';state.mode='online';state.page='online';save();onlineRoomListen()}).catch(e=>alert('ルームを確認できませんでした。\n'+e.message))}
+
+function joinOnlineRoom(code){
+  if(!firebaseReady()){
+    alert('Firebaseに接続できません。\nFirebase設定またはネット接続を確認してください。');
+    return;
+  }
+
+  code=String(code||'').trim().toUpperCase();
+
+  if(!/^[A-Z0-9]{4}$/.test(code)){
+    alert('4文字のルームコードを入力してください。');
+    return;
+  }
+
+  openModal(`
+    <h2>ルームを確認中…</h2>
+    <p>「${esc(code)}」のルームを確認しています。</p>
+    <div class="notice">少しお待ちください。</div>
+    <div class="gamebar">
+      <button class="btn" id="joinCancelDirect">戻る</button>
+    </div>
+  `);
+
+  let cancelled=false;
+
+  by('joinCancelDirect',()=>{
+    cancelled=true;
+    openOnlineLobby();
+  });
+
+  const ref=window.MARUBATSU_DB.ref('rooms/'+code);
+
+  const timeout=setTimeout(()=>{
+    if(cancelled)return;
+
+    openModal(`
+      <h2>確認できませんでした</h2>
+      <p>ルームの確認に時間がかかっています。</p>
+      <div class="notice">通信状態を確認して、もう一度お試しください。</div>
+      <div class="gamebar">
+        <button class="btn primary" id="joinRetryDirect">もう一度入力</button>
+        <button class="btn" id="joinBackDirect">戻る</button>
+      </div>
+    `);
+
+    by('joinRetryDirect',openOnlineLobby);
+    by('joinBackDirect',openOnlineLobby);
+  },8000);
+
+  ref.once('value').then(s=>{
+    clearTimeout(timeout);
+
+    if(cancelled)return;
+
+    if(!s.exists()){
+      openModal(`
+        <h2>ルームが見つかりません</h2>
+        <p>入力したコードのルームは存在しません。</p>
+        <div class="gamebar">
+          <button class="btn primary" id="joinRetryMissingDirect">もう一度入力</button>
+          <button class="btn" id="joinBackMissingDirect">戻る</button>
+        </div>
+      `);
+
+      by('joinRetryMissingDirect',openOnlineLobby);
+      by('joinBackMissingDirect',openOnlineLobby);
+      return;
+    }
+
+    const d=s.val()||{};
+
+    if(d.guestName){
+      openModal(`
+        <h2>ルームが満員です</h2>
+        <p>このルームにはすでに参加者がいます。</p>
+        <div class="gamebar">
+          <button class="btn primary" id="joinRetryFullDirect">別のコードを入力</button>
+          <button class="btn" id="joinBackFullDirect">戻る</button>
+        </div>
+      `);
+
+      by('joinRetryFullDirect',openOnlineLobby);
+      by('joinBackFullDirect',openOnlineLobby);
+      return;
+    }
+
+    state.onlineRoom=code;
+    state.onlineRole='guest';
+    state.mode='online';
+    state.page='online';
+    state.previous='setup';
+    state._onlineResultShown=false;
+    state.skinTarget=2;
+
+    save();
+    render();
+
+    if(typeof onlineRoomListen==='function'){
+      onlineRoomListen();
+    }
+
+  }).catch(e=>{
+    clearTimeout(timeout);
+
+    if(cancelled)return;
+
+    console.error('MARUBATSU LINE join error:',e);
+
+    openModal(`
+      <h2>ルームを確認できませんでした</h2>
+      <p>Firebaseとの通信中にエラーが発生しました。</p>
+      <div class="notice">${esc(e&&e.message?e.message:'通信エラー')}</div>
+      <div class="gamebar">
+        <button class="btn primary" id="joinRetryErrorDirect">もう一度入力</button>
+        <button class="btn" id="joinBackErrorDirect">戻る</button>
+      </div>
+    `);
+
+    by('joinRetryErrorDirect',openOnlineLobby);
+    by('joinBackErrorDirect',openOnlineLobby);
+  });
+}
+
 function onlineRoomListen(){cleanupOnline();if(!state.onlineRoom)return;onlineRoomRef=window.MARUBATSU_DB.ref('rooms/'+state.onlineRoom);onlineRoomHandler=snap=>{const d=snap.val();if(!d){cleanupOnline();state.onlineRoom=null;state.onlineRole=null;state.page='setup';render();return}onlineLastSnapshot=d;state.size=Number(d.size||3);state.win=Number(d.win||3);state.board=Array.isArray(d.board)?d.board:Object.values(d.board||{});state.turn=Number(d.turn||0);state.starter=Number(d.starter||0);state.p1=d.hostName||'';state.p2=d.guestName||'';state.active=!!d.active;state.result=d.result||null;winning=Array.isArray(d.winning)?d.winning:[];state.timerRemaining=Number(d.timerRemaining??60);state.timerStartedAt=d.timerStartedAt||null;state.onlineConnected=state.onlineRole==='host'?!!d.guestOnline:!!d.hostOnline;if(state.active&&state.page==='online')state.page='game';if(state.page==='online'||state.page==='game')render();if(d.result&&!state._onlineResultShown){state._onlineResultShown=true;setTimeout(showVictory,40)}syncClock()};onlineRoomRef.on('value',onlineRoomHandler);onlinePresenceRef=onlineRoomRef.child(state.onlineRole==='host'?'hostOnline':'guestOnline');onlinePresenceRef.set(true);onlinePresenceRef.onDisconnect().set(false)}
 function updateOnlineRoom(p){if(!firebaseReady()||!state.onlineRoom)return Promise.resolve();return window.MARUBATSU_DB.ref('rooms/'+state.onlineRoom).update(p)}
 function setOnlineOwnName(name){const e=validatePlayerName(name);if(e){alert(e);return}const k=state.onlineRole==='host'?'hostName':'guestName';updateOnlineRoom({[k]:name})}
 function startOnlineMatch(){if(state.onlineRole!=='host')return;const d=onlineLastSnapshot||{};if(!d.hostName||!d.guestName){alert('両方のプレイヤー名を登録してください。');return}state._onlineResultShown=false;updateOnlineRoom({board:Array(state.size*state.size).fill(''),size:state.size,win:state.win,turn:Number(d.starter||0),starter:Number(d.starter||0),active:true,result:null,winning:[],timerRemaining:60,timerStartedAt:firebase.database.ServerValue.TIMESTAMP})}
 function onlineMove(i){if(!state.active||!onlineLastSnapshot||state.board[i]||winning.length)return;const myTurn=state.onlineRole==='host'?state.turn===0:state.turn===1;if(!myTurn)return;const b=state.board.slice(),v=state.turn===0?'X':'O';b[i]=v;const w=checkWin(b,v);const patch={board:b};if(w)Object.assign(patch,{winning:w,result:v,active:false,timerRemaining:currentRemaining(),timerStartedAt:null});else if(b.every(Boolean))Object.assign(patch,{winning:[],result:'draw',active:false,timerRemaining:currentRemaining(),timerStartedAt:null});else Object.assign(patch,{turn:1-state.turn,timerRemaining:60,timerStartedAt:firebase.database.ServerValue.TIMESTAMP});updateOnlineRoom(patch)}
 function onlineTimeout(){if(state.active)updateOnlineRoom({result:state.turn===0?'O':'X',active:false,winning:[],timerRemaining:0,timerStartedAt:null})}
-function openOnlineLobby(){openModal(`<h2>🌐 2台2人対戦</h2><p>ルームを作るか、相手から受け取った4文字のコードで参加します。</p><div class="grid"><button class="btn primary" id="makeRoom">部屋を作る</button><button class="btn" id="enterRoom">部屋に入る</button></div><div class="gamebar"><button class="btn small" id="onlineCancel">戻る</button></div>`);by('makeRoom',()=>{closeModal();createOnlineRoom()});by('enterRoom',()=>openModal(`<h2>ルームに入る</h2><label class="label">ルームコード</label><input class="field" id="joinCode" maxlength="4" placeholder="例：A7K3"><div class="gamebar"><button class="btn primary" id="joinGo">参加する</button><button class="btn" id="joinBack">戻る</button></div>`));by('joinGo',()=>{const el=document.getElementById('joinCode');const c=el?el.value:'';closeModal();joinOnlineRoom(c)});by('joinBack',()=>{closeModal();setTimeout(()=>openOnlineLobby(),0)});by('onlineCancel',()=>{closeModal()})}
+
+function openOnlineLobby(){
+  openModal(`<h2>🌐 2台2人対戦</h2><p>ルームを作るか、相手から受け取った4文字のコードで参加します。</p><div class="grid"><button class="btn primary" id="makeRoom">部屋を作る</button><button class="btn" id="enterRoom">部屋に入る</button></div><div class="gamebar"><button class="btn small" id="onlineCancel">戻る</button></div>`);
+  by('makeRoom',()=>{closeModal();createOnlineRoom()});
+  by('enterRoom',()=>openModal(`<h2>ルームに入る</h2><label class="label">ルームコード</label><input class="field" id="joinCode" maxlength="4" placeholder="例：A7K3"><div class="gamebar"><button class="btn primary" id="joinGo">参加する</button><button class="btn" id="joinBack">戻る</button></div>`));
+
+  by('joinGo',()=>{
+    const el=document.getElementById('joinCode');
+    const c=el?el.value:'';
+    joinOnlineRoom(c);
+  });
+
+  by('joinBack',()=>{closeModal();setTimeout(()=>openOnlineLobby(),0)});
+  by('onlineCancel',()=>{closeModal()})
+}
+
 function onlinePage(p){
   const d=onlineLastSnapshot||{},ownName=state.onlineRole==='host'?(d.hostName||''):(d.guestName||''),ownSkin=state.onlineRole==='host'?(d.hostSkin||''):(d.guestSkin||'');
   const otherName=state.onlineRole==='host'?(d.guestName||''):(d.hostName||''),otherSkin=state.onlineRole==='host'?(d.guestSkin||''):(d.hostSkin||'');
